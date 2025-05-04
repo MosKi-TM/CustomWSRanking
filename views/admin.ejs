@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Regatta Admin</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .regatta-list { margin: 20px 0; border: 1px solid #ddd; padding: 10px; }
+    .regatta-item { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #eee; }
+    .regatta-item:last-child { border-bottom: none; }
+    button { background: #f44336; color: white; border: none; padding: 5px 10px; cursor: pointer; }
+    input[type="text"] { padding: 8px; width: 70%; }
+  </style>
+</head>
+<body>
+  <h1>Regatta Links Manager</h1>
+  
+  <form id="addRegattaForm">
+    <input type="text" name="url" placeholder="https://ffvoile.fr/.../clid=12345" required>
+    <button type="submit">Add Regatta</button>
+  </form>
+
+  <div class="regatta-list">
+    <% regattas.forEach((regatta, index) => { %>
+      <div class="regatta-item">
+        <a href=<%= regatta %>><%= regatta %></a>
+        <button onclick="deleteRegatta(<%= index %>)">Delete</button>
+      </div>
+    <% }); %>
+  </div>
+
+  <div>
+    <button onclick="computeRankings()">Compute Rankings</button>
+    <a href="/" target="_blank">View Rankings</a>
+  </div>
+
+  <script>
+    // Add new regatta
+    document.getElementById('addRegattaForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      await fetch('/regattas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(formData)
+      });
+      window.location.reload();
+    });
+
+    // Delete regatta
+    async function deleteRegatta(index) {
+      if (confirm('Delete this regatta?')) {
+        await fetch(`/regattas/${index}`, { method: 'DELETE' });
+        window.location.reload();
+      }
+    }
+
+    // Compute rankings
+    async function computeRankings() {
+      const response = await fetch('/api/compute-rankings', { method: 'POST' });
+      const result = await response.json();
+      if (result.success) {
+        alert('Rankings computed!');
+      }
+    }
+  </script>
+</body>
+</html>
