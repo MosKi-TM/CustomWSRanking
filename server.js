@@ -4,9 +4,34 @@ const fs = require('fs');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const apiRoutes = require('./routes/api');
-
+const admin = require('firebase-admin');
+require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const serviceAccount = {
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  privateKeyId: process.env.FIREBASE_PRIVATE_KEY_ID,
+  privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),  // Ensure line breaks are properly formatted
+  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+  clientId: process.env.FIREBASE_CLIENT_ID,
+};
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
+});
+
+const db = admin.firestore();
+const REGATTAS_COLLECTION = 'regattas'; // Firestore collection for regattas
+const RANKINGS_COLLECTION = 'rankings'; // Firestore collection for rankings
+
+// Fetch regattas from Firestore
+async function getRegattas() {
+  const snapshot = await db.collection(REGATTAS_COLLECTION).get();
+  const regattas = snapshot.docs.map(doc => doc.data().url);
+  return regattas;
+}
 
 async function fetchTableData(url) {
   try {
@@ -56,9 +81,8 @@ async function fetchTableData(url) {
 
     const ranked = currentPlace;
     results.forEach((elem) => {
-      const base = ranked - elem.place + 1;
-      const multiplier = 1 + Math.log(ranked + 1);
-      elem.points = Math.round(base * multiplier);
+      const ppremier = 200;
+      elem.points = Math.round( (ppremier*(ranked - elem.place)+10*(elem.place-1))/(ranked-1) );
     });
     results.splice(0,1);
     return results;
@@ -149,45 +173,55 @@ if (!fs.existsSync(RANKINGS_FILE)) {
 }
 
 // Admin dashboard
-app.get('/admin', (req, res) => {
-  const regattas = JSON.parse(fs.readFileSync(REGATTAS_FILE));
+app.get('/admin', async (req, res) => {
+  const regattas = await getRegattas();
   res.render('admin', { regattas });
 });
 
 
 // Add new regatta
-app.post('/regattas', (req, res) => {
+// Add new regatta
+app.post('/regattas', async (req, res) => {
   const { url } = req.body;
-  const regattas = JSON.parse(fs.readFileSync(REGATTAS_FILE));
+  const regattas = await getRegattas();
   
   if (!regattas.includes(url)) {
-    regattas.push(url);
-    fs.writeFileSync(REGATTAS_FILE, JSON.stringify(regattas, null, 2));
+    await db.collection(REGATTAS_COLLECTION).add({ url });
   }
   
   res.redirect('/');
 });
 
 // Delete regatta
-app.delete('/regattas/:index', (req, res) => {
-  const regattas = JSON.parse(fs.readFileSync(REGATTAS_FILE));
-  regattas.splice(req.params.index, 1);
-  fs.writeFileSync(REGATTAS_FILE, JSON.stringify(regattas, null, 2));
+app.delete('/regattas/:id', async (req, res) => {
+  const regattaId = req.params.id;
+  await db.collection(REGATTAS_COLLECTION).doc(regattaId).delete();
   res.sendStatus(200);
 });
 
+
 // API: Get computed rankings
-app.get('/api/ranking', (req, res) => {
-  const rankings = JSON.parse(fs.readFileSync(RANKINGS_FILE));
-  res.json(rankings);
+app.get('/api/ranking', async (req, res) => {
+  const rankingRef = db.collection(RANKINGS_COLLECTION).doc('currentRanking');
+  const doc = await rankingRef.get();
+
+  if (doc.exists) {
+    res.json(doc.data().ranking);
+  } else {
+    res.status(404).json({ message: 'No rankings found' });
+  }
 });
 
 // API: Trigger ranking computation
 app.post('/api/compute-rankings', async (req, res) => {
-  const regattas = JSON.parse(fs.readFileSync(REGATTAS_FILE));
+  const regattas = await getRegattas();
   const results = await Promise.all(regattas.map(fetchTableData));
   const ranking = await computeOverallRankings(results);
-  fs.writeFileSync(RANKINGS_FILE, JSON.stringify(ranking, null, 2));
+  
+  // Save rankings in Firestore
+  const rankingRef = db.collection(RANKINGS_COLLECTION).doc('currentRanking');
+  await rankingRef.set({ ranking: ranking });
+
   res.json({ success: true });
 });
 
