@@ -9,6 +9,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+
 const serviceAccount = {
   projectId: process.env.FIREBASE_PROJECT_ID,
   privateKeyId: process.env.FIREBASE_PRIVATE_KEY_ID,
@@ -25,12 +26,35 @@ admin.initializeApp({
 const db = admin.firestore();
 const REGATTAS_COLLECTION = 'regattas'; // Firestore collection for regattas
 const RANKINGS_COLLECTION = 'rankings'; // Firestore collection for rankings
+const CUSTOM_REGATTAS_COLLECTION = 'custom_regattas';
 
 // Fetch regattas from Firestore
 async function getRegattas() {
   const snapshot = await db.collection(REGATTAS_COLLECTION).get();
   const regattas = snapshot.docs.map(doc => doc.data().url);
   return regattas;
+}
+
+async function fetchSailorInfo(license) {
+  try {
+    const url = `https://www.ffvoile.fr/ffv/sportif/cif/cif_detail.aspx?NoLicence=${license}`;
+    const response = await axios.get(url);
+    const $ = cheerio.load(response.data);
+
+    // These selectors will need to be tested on the actual page structure
+    const fullname = $('#cph_Corps_lbNom').text().trim() ;
+    const prenom = $('#cph_Corps_lbPrenom').text().trim();
+    const name = fullname + " " + prenom
+    const club = $('#cph_Corps_lbClub').text().trim();
+    const category = "";
+    const gender = "";
+    const department = "44";
+
+    return { name, club, category, gender, department };
+  } catch (err) {
+    console.error(`Error fetching sailor ${license}:`, err);
+    return { name: "Unknown", club: "", category: "", gender: "", department: "" };
+  }
 }
 
 async function fetchTableData(url) {
@@ -172,11 +196,52 @@ if (!fs.existsSync(RANKINGS_FILE)) {
   fs.writeFileSync(RANKINGS_FILE, '[]');
 }
 
+async function getCustomRegattas() {
+  const snapshot = await db.collection(CUSTOM_REGATTAS_COLLECTION).get();
+  return snapshot.docs.map(doc => doc.data().results);
+}
+
+
 // Admin dashboard
 app.get('/admin', async (req, res) => {
   const regattas = await getRegattas();
   res.render('admin', { regattas });
 });
+
+app.post('/regattas/custom', async (req, res) => {
+  const { name, results } = req.body;
+
+  if (!name || !Array.isArray(results)) {
+    return res.status(400).json({ error: "Invalid format. Expect { name, results: [...] }" });
+  }
+
+  const ranked = Math.max(...results.map(r => r.place));
+
+  // Enrich sailors
+  const enrichedResults = await Promise.all(results.map(async (sailor) => {
+    const info = await fetchSailorInfo(sailor.license);
+
+    // compute points
+    const ppremier = 200;
+    const points = Math.round((ppremier * (ranked - sailor.place) + 10 * (sailor.place - 1)) / (ranked - 1));
+
+    return {
+      place: sailor.place,
+      license: sailor.license,
+      ...info,
+      points
+    };
+  }));
+
+  // Save in Firestore
+  await db.collection(CUSTOM_REGATTAS_COLLECTION).add({ 
+    name, 
+    results: enrichedResults 
+  });
+
+  res.json({ success: true, message: `Custom regatta '${name}' added.`, results: enrichedResults });
+});
+
 
 
 // Add new regatta
@@ -212,20 +277,38 @@ app.get('/api/ranking', async (req, res) => {
   }
 });
 
-// API: Trigger ranking computation
+app.delete('/regattas/custom/:id', async (req, res) => {
+  const regattaId = req.params.id;
+  await db.collection(CUSTOM_REGATTAS_COLLECTION).doc(regattaId).delete();
+  res.sendStatus(200);
+});
+
+// Admin dashboard for custom regattas
+app.get('/admin/custom', async (req, res) => {
+  const snapshot = await db.collection(CUSTOM_REGATTAS_COLLECTION).get();
+  const customRegattas = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  res.render('customAdmin', { customRegattas });
+});
+
 app.post('/api/compute-rankings', async (req, res) => {
-  const regattas = await getRegattas();
-  const results = await Promise.all(regattas.map(fetchTableData));
-  const ranking = await computeOverallRankings(results);
-  
+  const regattas = await getRegattas(); // from FFVoile URLs
+  const resultsFromUrls = await Promise.all(regattas.map(fetchTableData));
+
+  const resultsFromCustom = await getCustomRegattas(); // JSON regattas
+
+  const allResults = [...resultsFromUrls, ...resultsFromCustom];
+
+  const ranking = await computeOverallRankings(allResults);
+
   // Save rankings in Firestore
   const rankingRef = db.collection(RANKINGS_COLLECTION).doc('currentRanking');
   await rankingRef.set({ ranking: ranking });
 
-  res.json({ success: true });
+  res.json({ success: true, ranking });
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
+
