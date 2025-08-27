@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Custom Regattas Admin</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
+    input, button { padding: 8px; margin: 5px 0; }
+    button { cursor: pointer; }
+    .participant { display: flex; gap: 10px; margin-bottom: 5px; }
+    .participant input { flex: 1; }
+    .participant button { background: #f55; color: #fff; border: none; border-radius: 4px; }
+    .regatta-list { margin: 20px 0; border: 1px solid #ddd; padding: 10px; }
+    .regatta-item { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #eee; }
+    .regatta-item:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+  <h1>Custom Regattas Manager</h1>
+  
+  <h2>Add Custom Regatta</h2>
+  <form id="addCustomForm">
+    <input type="text" name="name" placeholder="Regatta name" required><br>
+    
+    <div id="participants"></div>
+    <button type="button" onclick="addParticipant()">➕ Add Participant</button><br>
+
+    <button type="submit">Add Custom Regatta</button>
+  </form>
+
+  <h2>Existing Custom Regattas</h2>
+  <div class="regatta-list">
+    <% customRegattas.forEach(regatta => { %>
+      <div class="regatta-item">
+        <span><%= regatta.name %></span>
+        <button onclick="deleteCustom('<%= regatta.id %>')">Delete</button>
+      </div>
+    <% }) %>
+  </div>
+
+  <script>
+    // Add new participant row
+    function addParticipant(place = "", license = "") {
+      const div = document.createElement("div");
+      div.className = "participant";
+      div.innerHTML = `
+        <input type="number" name="place" placeholder="Place" value="${place}" required>
+        <input type="text" name="license" placeholder="License ID" value="${license}" required>
+        <button type="button" onclick="this.parentElement.remove()">✖</button>
+      `;
+      document.getElementById("participants").appendChild(div);
+    }
+
+    // Start with one participant row by default
+    addParticipant();
+
+    // Handle form submission
+    document.getElementById('addCustomForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = e.target.querySelector('[name="name"]').value;
+
+      // Build results array
+      const participants = Array.from(document.querySelectorAll('#participants .participant'));
+      const results = participants.map(row => ({
+        place: parseInt(row.querySelector('[name="place"]').value, 10),
+        license: row.querySelector('[name="license"]').value.trim()
+      }));
+
+      // Send to API
+      await fetch('/regattas/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, results })
+      });
+
+      window.location.reload();
+    });
+
+    // Delete custom regatta
+    async function deleteCustom(id) {
+      if (confirm('Delete this custom regatta?')) {
+        await fetch(`/regattas/custom/${id}`, { method: 'DELETE' });
+        window.location.reload();
+      }
+    }
+  </script>
+</body>
+</html>
